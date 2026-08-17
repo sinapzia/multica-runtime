@@ -139,19 +139,5 @@ volumes:
 
 networks:
   multica_runtime:
-    driver: overlay
-    attachable: false
-    # Subnet pinned on purpose. The DOCKER-USER firewall rules that stop agents
-    # reaching services published on the host IP are written against this
-    # range — if Docker were free to pick a new one after a `stack rm`, those
-    # rules would silently stop matching and the isolation would be gone.
-    #
-    # Check for collisions before the first deploy:
-    #   docker network ls -q | xargs docker network inspect \
-    #     --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
-    ipam:
-      driver: default
-      config:
-        - subnet: 10.87.42.0/24
-    # Do NOT set internal: true — it would also cut off api.anthropic.com,
-    # multica.ai and github.com, which the daemon needs.
+    external: true
+    name: multica_runtime
