@@ -1,0 +1,157 @@
+version: "3.8"
+
+# Multica agent runtime on Docker Swarm.
+#
+#   docker stack deploy -c multica-runtime-stack.yml --resolve-image never multica
+#
+# Build the image first (see RUNBOOK.md). Portainer can deploy this as a stack;
+# set MULTICA_RUNTIME_IMAGE in the stack's environment variables section —
+# `docker stack deploy` does NOT read a .env file the way `docker compose` does,
+# so export it in your shell when using the CLI.
+
+services:
+  runtime:
+    image: ${MULTICA_RUNTIME_IMAGE:-multica-runtime:latest}
+
+    environment:
+      # Swarm gives every new task a fresh container hostname, and the daemon
+      # defaults its ID to the hostname — so without these pinned, each redeploy
+      # would register as a brand new runtime and orphan the old one.
+      MULTICA_DAEMON_ID: "vps-runtime"
+      MULTICA_DAEMON_DEVICE_NAME: "vps-runtime"
+      MULTICA_AGENT_RUNTIME_NAME: "VPS Runtime"
+
+      MULTICA_WORKSPACES_ROOT: "/home/node/multica_workspaces"
+
+      # Set as a STACK environment variable in Portainer, not here — that way
+      # the two-phase deploy needs no git commit. Leave it unset on the first
+      # deploy, then read the UUID from inside the container:
+      #   multica workspace list --full-id
+      # Token login is not documented to auto-discover workspaces the way the
+      # browser flow is, so pin it rather than hoping.
+      MULTICA_WORKSPACE_ID: "${MULTICA_WORKSPACE_ID:-}"
+
+      # Default is 20. This runs on the MANAGER, next to the swarm control
+      # plane — a runaway agent here does not just lose you the runtime, it
+      # loses you the node that governs the cluster. Start at 1.
+      MULTICA_DAEMON_MAX_CONCURRENT_TASKS: "1"
+
+      # Default is 0 = no cap, bounded only by the idle (30m) and tool (2h)
+      # watchdogs. That is a long time for a wedged agent to hold CPU.
+      MULTICA_AGENT_TIMEOUT: "45m"
+
+      # GC. The real defaults are 24h (done/cancelled), 72h (orphans) and
+      # 12h (build artifacts on still-open issues) — NOT 30 days.
+      # Artifact patterns default to node_modules,.next,.turbo only.
+      MULTICA_GC_ARTIFACT_PATTERNS: "node_modules,.next,.turbo,dist,target,__pycache__,.venv"
+
+      GIT_AUTHOR_NAME: "Multica Agent"
+      GIT_AUTHOR_EMAIL: "agent@example.com"
+      GIT_SSH_KNOWN_HOSTS: "github.com"
+
+      # Honoured now that tzdata is installed in the image.
+      TZ: "America/Argentina/Buenos_Aires"
+
+    secrets:
+      - multica_token
+      - git_ssh_key
+      # Minted with `claude setup-token` on a machine that has a browser.
+      # Removes the interactive login step entirely.
+      - claude_oauth_token
+
+    volumes:
+      # Daemon credentials, profile and state.
+      - multica_state:/home/node/.multica
+      # Claude Code login. Must match CLAUDE_CONFIG_DIR in the image, or
+      # .claude.json lands outside the volume and you get logged out on redeploy.
+      - claude_state:/home/node/.claude
+      # Task workdirs plus the shared bare-clone cache under .repos/.
+      # This is the one that grows — watch it.
+      - multica_workspaces:/home/node/multica_workspaces
+
+    # Dedicated overlay. NEVER attach this service to network_swarm_public or
+    # any other shared network: overlay separation is what keeps agents away
+    # from postgres, redis and every other stack on this box.
+    networks:
+      - multica_runtime
+
+    # No docker socket, no host bind mounts of your production projects.
+    # Tasks run with this container's full permissions; the isolation is the
+    # entire point of putting it here instead of on the host.
+
+    deploy:
+      mode: replicated
+      replicas: 1
+
+      # Named volumes are node-local, so the runtime must always land on the
+      # same node or it silently comes up with empty state.
+      #
+      # WARNING: this is only unambiguous while there is exactly ONE manager.
+      # If you ever promote a second node to manager, Swarm may schedule this
+      # task there and it will come up with empty volumes and a logged-out
+      # Claude. At that point switch to node.hostname or a node label.
+      placement:
+        constraints:
+          - node.role == manager
+
+      # Belt and braces: if this service ever ends up on a Traefik-observed
+      # network, exposedByDefault=true would publish it to the internet.
+      labels:
+        - traefik.enable=false
+
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+
+    # The daemon deregisters its runtimes on shutdown and may have tasks in
+    # flight. The 10s default is not enough, and stop-first means every update
+    # goes through this path.
+    stop_grace_period: 120s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  multica_token:
+    external: true
+  git_ssh_key:
+    external: true
+  claude_oauth_token:
+    external: true
+
+volumes:
+  multica_state:
+  claude_state:
+  multica_workspaces:
+
+networks:
+  multica_runtime:
+    driver: overlay
+    attachable: false
+    # Subnet pinned on purpose. The DOCKER-USER firewall rules that stop agents
+    # reaching services published on the host IP are written against this
+    # range — if Docker were free to pick a new one after a `stack rm`, those
+    # rules would silently stop matching and the isolation would be gone.
+    #
+    # Check for collisions before the first deploy:
+    #   docker network ls -q | xargs docker network inspect \
+    #     --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}}{{end}}'
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.87.42.0/24
+    # Do NOT set internal: true — it would also cut off api.anthropic.com,
+    # multica.ai and github.com, which the daemon needs.
