@@ -7,9 +7,10 @@ FROM node:20-slim
 ARG TZ=UTC
 ENV TZ="$TZ"
 
-# Pin this. `latest` means every rebuild is a different agent, and a bad
-# Claude Code release becomes an outage you cannot roll back to.
-ARG CLAUDE_CODE_VERSION=latest
+# Pinned. `latest` means every rebuild is a different agent, and a bad
+# Claude Code release becomes an outage you cannot roll back to. To bump,
+# change this default, rebuild, and redeploy — see RUNBOOK.md.
+ARG CLAUDE_CODE_VERSION=2.1.234
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
@@ -37,7 +38,11 @@ RUN mkdir -p /usr/local/share/npm-global && \
 # self-update attempt fails and noises up the logs. Version is a build input.
 ENV DISABLE_AUTOUPDATER=1
 
-# Multica CLI. MULTICA_BIN_DIR keeps the installer out of its sudo path.
+# Multica CLI. Left on latest, unlike Claude Code above — the daemon
+# auto-updates itself in runtime by default (MULTICA_DAEMON_AUTO_UPDATE,
+# see multica-runtime-stack.yml), so whatever ships in the image only
+# matters for the first boot; pinning it here would just be cosmetic.
+# MULTICA_BIN_DIR keeps the installer out of its sudo path.
 RUN curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh \
   | MULTICA_BIN_DIR=/usr/local/bin bash \
   && multica --version
@@ -66,10 +71,11 @@ ENV HOME=/home/node
 ENV CLAUDE_CONFIG_DIR=/home/node/.claude
 ENV MULTICA_WORKSPACES_ROOT=/home/node/multica_workspaces
 
-# The daemon exposes a health port (per-profile). Confirm the actual port on
-# your build with `multica daemon status --output json`, then enable:
-# HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
-#   CMD multica daemon status >/dev/null 2>&1 || exit 1
+# `multica daemon status` talks to the local daemon directly — no port to
+# configure — and exits non-zero if it's not reachable, so a hung daemon
+# gets caught even though the container process itself is still alive.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=90s --retries=3 \
+  CMD multica daemon status >/dev/null 2>&1 || exit 1
 
 # tini reaps the agent processes Claude Code spawns; without it they pile up as
 # zombies in a long-lived daemon container.
