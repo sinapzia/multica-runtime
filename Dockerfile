@@ -38,17 +38,13 @@ RUN mkdir -p /usr/local/share/npm-global && \
 # self-update attempt fails and noises up the logs. Version is a build input.
 ENV DISABLE_AUTOUPDATER=1
 
-# Multica CLI. Pinned for the same reason as CLAUDE_CODE_VERSION above —
-# scripts/install.sh always resolves the latest GitHub release with no
-# version override, so we download the tagged release asset directly
-# instead of piping the installer to bash.
-ARG MULTICA_CLI_VERSION=0.4.28
-RUN curl -fsSL "https://github.com/multica-ai/multica/releases/download/v${MULTICA_CLI_VERSION}/multica-cli-${MULTICA_CLI_VERSION}-linux-amd64.tar.gz" \
-  -o /tmp/multica.tar.gz \
-  && tar -xzf /tmp/multica.tar.gz -C /tmp multica \
-  && mv /tmp/multica /usr/local/bin/multica \
-  && chmod +x /usr/local/bin/multica \
-  && rm /tmp/multica.tar.gz \
+# Multica CLI. Left on latest, unlike Claude Code above — the daemon
+# auto-updates itself in runtime by default (MULTICA_DAEMON_AUTO_UPDATE,
+# see multica-runtime-stack.yml), so whatever ships in the image only
+# matters for the first boot; pinning it here would just be cosmetic.
+# MULTICA_BIN_DIR keeps the installer out of its sudo path.
+RUN curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh \
+  | MULTICA_BIN_DIR=/usr/local/bin bash \
   && multica --version
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

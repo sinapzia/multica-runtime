@@ -30,11 +30,17 @@ If the `claude_oauth_token` secret isn't set, log in interactively once
 
     docker exec -it <container-id> claude   # never with -u root
 
-## Bumping pinned versions
+## Bumping the pinned Claude Code version
 
-`CLAUDE_CODE_VERSION` and `MULTICA_CLI_VERSION` in the Dockerfile are pinned
-on purpose — see the comments above each `ARG`. To bump either, change the
-default, rebuild, and redeploy. There is no auto-update.
+`CLAUDE_CODE_VERSION` in the Dockerfile is pinned on purpose (see the
+comment above the `ARG`) — Claude Code's self-updater is disabled, so the
+version baked into the image is what runs until the next rebuild. To bump
+it, change the default, rebuild, and redeploy.
+
+The multica CLI is intentionally left on latest: the daemon auto-updates
+itself at runtime by default (`MULTICA_DAEMON_AUTO_UPDATE`, unset in
+multica-runtime-stack.yml), so pinning it in the image would only affect
+the first boot.
 
 ## Recovery
 
