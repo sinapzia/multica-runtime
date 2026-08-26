@@ -1,8 +1,8 @@
 FROM node:20-slim
 
 # Runtime image for a Multica agent runtime: the Multica daemon plus the
-# Claude Code CLI it drives. Deliberately NOT the Multica server — this box
-# only executes tasks handed to it by Multica Cloud.
+# provider CLIs it drives (Claude Code, OpenCode). Deliberately NOT the
+# Multica server — this box only executes tasks handed to it by Multica Cloud.
 
 ARG TZ=UTC
 ENV TZ="$TZ"
@@ -38,6 +38,14 @@ RUN mkdir -p /usr/local/share/npm-global && \
 # self-update attempt fails and noises up the logs. Version is a build input.
 ENV DISABLE_AUTOUPDATER=1
 
+# OpenCode, the OpenAI-backed sibling provider. Same rationale as Claude Code
+# above: pinned on purpose so a rebuild doesn't silently change which agent
+# runs, and self-update is disabled for the same root-owned-prefix reason.
+ARG OPENCODE_VERSION=1.18.23
+RUN npm install -g opencode-ai@${OPENCODE_VERSION} && \
+  opencode --version
+ENV OPENCODE_DISABLE_AUTOUPDATE=1
+
 # Multica CLI. Left on latest, unlike Claude Code above — the daemon
 # auto-updates itself in runtime by default (MULTICA_DAEMON_AUTO_UPDATE,
 # see multica-runtime-stack.yml), so whatever ships in the image only
@@ -56,7 +64,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Creating AND chowning them here is load-bearing: an empty named volume
 # inherits the ownership of the image directory it covers. Drop this and the
 # volumes come up root-owned and the daemon cannot write to them.
-RUN mkdir -p /home/node/.multica /home/node/.claude /home/node/multica_workspaces /home/node/.ssh && \
+RUN mkdir -p /home/node/.multica /home/node/.claude /home/node/multica_workspaces /home/node/.ssh \
+    /home/node/.local/share/opencode /home/node/.config/opencode && \
   chmod 700 /home/node/.ssh && \
   chown -R node:node /home/node
 
