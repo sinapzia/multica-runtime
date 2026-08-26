@@ -15,6 +15,13 @@ Push it, then set `MULTICA_RUNTIME_IMAGE=<registry>/multica-runtime:<tag>` as a
 Requires the `multica_token`, `git_ssh_key`, `claude_oauth_token`, and
 `openai_api_key` Docker secrets to already exist (`external: true`).
 
+The overlay network is stack-managed, so nothing has to exist up front.
+If you are coming from the older `external: true` layout, the manually
+created `multica_runtime` network is left orphaned once you deploy this
+file — remove it after confirming no other service references it:
+
+    docker network rm multica_runtime
+
 On the very first deploy, leave `MULTICA_WORKSPACE_ID` unset, then read the
 resolved UUID from inside the running container:
 
