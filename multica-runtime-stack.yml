@@ -145,7 +145,14 @@ volumes:
   opencode_state:
   multica_workspaces:
 
+# Stack-managed, NOT external — Swarm creates and owns it as
+# multica_multica_runtime.
+#
+# It used to be `external: true`, which broke deploys through the Portainer
+# Agent: a swarm overlay only materialises on a node once a task attaches to
+# it there, so when the agent routed the deploy to the worker the external
+# lookup 404'd with "declared as external, but could not be found". Owning it
+# here skips that validation entirely, ties the network's lifecycle to the
+# stack, and stops any other stack from joining it by declaring the name.
 networks:
   multica_runtime:
-    external: true
-    name: multica_runtime
