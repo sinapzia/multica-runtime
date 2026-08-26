@@ -58,6 +58,8 @@ services:
       # Minted with `claude setup-token` on a machine that has a browser.
       # Removes the interactive login step entirely.
       - claude_oauth_token
+      # OpenCode's "openai" provider auto-detects this from the environment.
+      - openai_api_key
 
     volumes:
       # Daemon credentials, profile and state.
@@ -65,6 +67,9 @@ services:
       # Claude Code login. Must match CLAUDE_CONFIG_DIR in the image, or
       # .claude.json lands outside the volume and you get logged out on redeploy.
       - claude_state:/home/node/.claude
+      # OpenCode state (sessions, trust, and auth.json if ever seeded by hand
+      # or via `opencode auth login`). Path matches the image's XDG data dir.
+      - opencode_state:/home/node/.local/share/opencode
       # Task workdirs plus the shared bare-clone cache under .repos/.
       # This is the one that grows — watch it.
       - multica_workspaces:/home/node/multica_workspaces
@@ -131,10 +136,13 @@ secrets:
     external: true
   claude_oauth_token:
     external: true
+  openai_api_key:
+    external: true
 
 volumes:
   multica_state:
   claude_state:
+  opencode_state:
   multica_workspaces:
 
 networks:

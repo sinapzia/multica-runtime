@@ -116,6 +116,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# OpenCode authentication
+# ---------------------------------------------------------------------------
+# OpenCode's built-in "openai" provider auto-detects OPENAI_API_KEY from the
+# environment — no /connect or auth.json needed. If a future OpenCode release
+# drops that, fall back to seeding ~/.local/share/opencode/auth.json by hand
+# (see RUNBOOK.md) or an interactive `docker exec -it <container-id> opencode
+# auth login` (never with -u root — same reasoning as the Claude Code fallback).
+if [ -f /run/secrets/openai_api_key ]; then
+  export OPENAI_API_KEY="$(cat /run/secrets/openai_api_key)"
+  log "OpenCode will authenticate with the OpenAI API key secret."
+else
+  log "WARNING: no openai_api_key secret mounted — OpenCode agents will fail to call OpenAI."
+fi
+
+# ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
 # --foreground is what makes this a well-behaved container process: the default
