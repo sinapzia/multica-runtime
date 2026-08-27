@@ -89,6 +89,7 @@ services:
     secrets:
       - multica_token
       - git_ssh_key
+      - gh_token
       # Provider auth secrets (claude_oauth_token, openai_api_key, ...) are
       # NOT declared here — each comes from the matching overlay under
       # overlays/, so a stack only needs to create the secrets its chosen
@@ -162,6 +163,8 @@ secrets:
   multica_token:
     external: true
   git_ssh_key:
+    external: true
+  gh_token:
     external: true
   # claude_oauth_token, openai_api_key, ... declared in overlays/*.yml.
 

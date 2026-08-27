@@ -1,8 +1,9 @@
 FROM node:20-slim
 
-# Runtime image for a Multica agent runtime: the Multica daemon plus the
-# provider CLIs it drives (Claude Code, OpenCode). Deliberately NOT the
-# Multica server — this box only executes tasks handed to it by Multica Cloud.
+# Runtime image for a Multica agent runtime: the Multica daemon, the provider
+# CLIs it drives (Claude Code, OpenCode), and gh for opening PRs. Deliberately
+# NOT the Multica server — this box only executes tasks handed to it by
+# Multica Cloud.
 
 ARG TZ=UTC
 ENV TZ="$TZ"
@@ -54,6 +55,21 @@ ENV OPENCODE_DISABLE_AUTOUPDATE=1
 RUN curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh \
   | MULTICA_BIN_DIR=/usr/local/bin bash \
   && multica --version
+
+# GitHub CLI, so agents can open PRs directly (`gh pr create`) instead of just
+# pushing a branch — step 7 of the Backend Engineer workflow. Not pinned, same
+# as the other apt packages above (git, jq, ...): unlike Claude Code/OpenCode,
+# a `gh` version bump does not change agent behavior, just the CLI it shells
+# out to.
+RUN mkdir -p -m 755 /etc/apt/keyrings \
+  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+       -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+  && apt-get update && apt-get install -y --no-install-recommends gh \
+  && apt-get clean && rm -rf /var/lib/apt/lists/* \
+  && gh --version
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

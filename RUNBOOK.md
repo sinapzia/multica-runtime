@@ -113,6 +113,13 @@ printf '%s' '<multica-token>' | docker secret create multica_token -
 # Git deploy/user key. Must have WRITE access — agents push branches.
 # Must NOT have a passphrase; entrypoint.sh will tell you at boot if it does.
 docker secret create git_ssh_key /path/to/id_ed25519
+
+# GitHub API token so agents can `gh pr create` instead of just pushing a
+# branch. A fine-grained PAT scoped to the repos agents touch, with
+# "Pull requests: write" and "Contents: read" — do not hand it a
+# classic/all-repo token. gh reads GH_TOKEN straight from the environment,
+# no interactive `gh auth login` step.
+printf '%s' '<gh-token>' | docker secret create gh_token -
 ```
 
 **Only if deploying `overlays/claude.yml`:**
@@ -136,9 +143,9 @@ silent auth failure later. The SSH key is the exception — it needs its newline
 which is why it is created from a file, and `entrypoint.sh` normalises CRLF and
 the trailing newline on the way in.
 
-Confirm: `docker secret ls` should list `multica_token` and `git_ssh_key`, plus
-`claude_oauth_token` and/or `openai_api_key` depending on which overlay(s) this
-stack deploys with.
+Confirm: `docker secret ls` should list `multica_token`, `git_ssh_key` and
+`gh_token`, plus `claude_oauth_token` and/or `openai_api_key` depending on
+which overlay(s) this stack deploys with.
 
 ### 2. Get the build context onto the manager
 
@@ -295,9 +302,9 @@ docker exec -it <container-id> ls /run/secrets/   # secrets match the overlay(s)
 multica runtime list --output json
 ```
 
-The `ls /run/secrets/` output should match what you deployed: `multica_token`
-and `git_ssh_key` always, plus `claude_oauth_token` and/or `openai_api_key`
-depending on which overlay(s) you used.
+The `ls /run/secrets/` output should match what you deployed: `multica_token`,
+`git_ssh_key` and `gh_token` always, plus `claude_oauth_token` and/or
+`openai_api_key` depending on which overlay(s) you used.
 
 `runtime list` should show **two** entries for this one container regardless
 of which overlay(s) you deployed — the daemon registers one runtime per agent
@@ -442,6 +449,26 @@ One slot means every agent queues behind every other, including both providers:
 Claude and OpenCode share the same container and therefore the same pool. Raise
 it to 2–3 if queueing becomes the bottleneck; split into a second stack only if
 you genuinely need the two providers running concurrently.
+
+---
+
+## GitHub CLI (`gh`) support
+
+Auth is the `gh_token` secret: `entrypoint.sh` exports it as `GH_TOKEN`, which
+`gh` picks up from the environment automatically — no `gh auth login` step,
+and nothing to persist in a state volume. This is separate from
+`git_ssh_key`: the SSH key can `clone`/`push`, but `gh pr create` and friends
+go through the GitHub API, which needs its own token.
+
+Use a **fine-grained** personal access token scoped to just the repos agents
+touch, with `Pull requests: write` and `Contents: read` — not a classic token
+with full-account access. If the secret isn't set, `git push` still works;
+only `gh` calls fail, with a `WARNING` in `docker service logs` at boot as the
+tell.
+
+To rotate: `docker secret create gh_token_v2 ...`, update the stack to
+reference the new secret name, redeploy, then remove the old one. Docker
+secrets can't be updated in place.
 
 ---
 
