@@ -1,16 +1,30 @@
 version: "3.8"
 
-# Multica agent runtime on Docker Swarm.
+# Multica agent runtime on Docker Swarm — BASE file. The image ships both
+# Claude Code and OpenCode (see Dockerfile); this file alone authenticates
+# neither. Combine it with one or both provider overlays under overlays/:
 #
-#   docker stack deploy -c multica-runtime-stack.yml --resolve-image never multica
+#   # Claude only
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
+#     --resolve-image never multica
+#
+#   # OpenCode only
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
+#     --resolve-image never multica
+#
+#   # Both
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
+#     -c overlays/opencode.yml --resolve-image never multica
 #
 # Build the image first, ON THE MANAGER (see "Installing on a fresh host" in
-# RUNBOOK.md — the four external secrets have to exist before the first deploy,
-# and if you deploy through Portainer the agent needs AGENT_CLUSTER_ADDR set or
-# roughly half of all deploys land on a worker and fail to create the network).
+# RUNBOOK.md — the secrets this file plus the overlay(s) you pick reference
+# have to exist before the first deploy, and if you deploy through Portainer
+# the agent needs AGENT_CLUSTER_ADDR set or roughly half of all deploys land
+# on a worker and fail to create the network).
 #
 # Portainer can deploy this as a stack — web editor or git-backed, both work —
-# by setting MULTICA_RUNTIME_IMAGE in the stack's environment variables section.
+# by setting MULTICA_RUNTIME_IMAGE in the stack's environment variables
+# section, and pasting/pointing at the base file plus the overlay(s) you want.
 # Leave the "re-pull image" toggle OFF while the tag only exists in the
 # manager's local image store: it runs `docker pull`, which has nothing to pull
 # from. On the CLI,
@@ -75,24 +89,20 @@ services:
     secrets:
       - multica_token
       - git_ssh_key
-      # Minted with `claude setup-token` on a machine that has a browser.
-      # Removes the interactive login step entirely.
-      - claude_oauth_token
-      # OpenCode's "openai" provider auto-detects this from the environment.
-      - openai_api_key
+      - gh_token
+      # Provider auth secrets (claude_oauth_token, openai_api_key, ...) are
+      # NOT declared here — each comes from the matching overlay under
+      # overlays/, so a stack only needs to create the secrets its chosen
+      # provider(s) actually use.
 
     volumes:
       # Daemon credentials, profile and state.
       - multica_state:/home/node/.multica
-      # Claude Code login. Must match CLAUDE_CONFIG_DIR in the image, or
-      # .claude.json lands outside the volume and you get logged out on redeploy.
-      - claude_state:/home/node/.claude
-      # OpenCode state (sessions, trust, and auth.json if ever seeded by hand
-      # or via `opencode auth login`). Path matches the image's XDG data dir.
-      - opencode_state:/home/node/.local/share/opencode
       # Task workdirs plus the shared bare-clone cache under .repos/.
       # This is the one that grows — watch it.
       - multica_workspaces:/home/node/multica_workspaces
+      # Provider state volumes (claude_state, opencode_state, ...) are added
+      # by the matching overlay under overlays/, same reasoning as above.
 
     # Dedicated overlay. NEVER attach this service to network_swarm_public or
     # any other shared network: overlay separation is what keeps agents away
@@ -154,16 +164,14 @@ secrets:
     external: true
   git_ssh_key:
     external: true
-  claude_oauth_token:
+  gh_token:
     external: true
-  openai_api_key:
-    external: true
+  # claude_oauth_token, openai_api_key, ... declared in overlays/*.yml.
 
 volumes:
   multica_state:
-  claude_state:
-  opencode_state:
   multica_workspaces:
+  # claude_state, opencode_state, ... declared in overlays/*.yml.
 
 # Stack-managed, NOT external — Swarm creates and owns it as
 # multica_multica_runtime.

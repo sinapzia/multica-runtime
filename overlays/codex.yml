@@ -1,0 +1,38 @@
+version: "3.8"
+
+# Codex overlay for ../multica-runtime-stack.yml — NOT READY TO DEPLOY.
+#
+# Scaffolding only, kept consistent with overlays/claude.yml and
+# overlays/opencode.yml so the pattern is ready once Codex support lands.
+# The image does not install a Codex CLI yet and entrypoint.sh does not read
+# codex_api_key, so deploying this overlay today creates a secret and an
+# empty volume that nothing consumes.
+#
+# To wire it up for real:
+#   1. Install the Codex CLI in Dockerfile, alongside Claude Code/OpenCode.
+#   2. In entrypoint.sh, export its auth env var (or seed its config file)
+#      from /run/secrets/codex_api_key, mirroring the claude_oauth_token /
+#      openai_api_key blocks.
+#   3. Confirm the real config/state directory Codex expects and fix the
+#      volume mount path below (/home/node/.codex is a placeholder guess).
+#   4. Add codex_api_key to RUNBOOK.md's secrets step and the runtime-count
+#      note in step 5.
+#
+# Once wired up, deploy with:
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/codex.yml \
+#     --resolve-image never multica
+# (combinable with overlays/claude.yml and/or overlays/opencode.yml)
+
+services:
+  runtime:
+    secrets:
+      - codex_api_key
+    volumes:
+      - codex_state:/home/node/.codex   # TODO: confirm real path
+
+secrets:
+  codex_api_key:
+    external: true
+
+volumes:
+  codex_state:

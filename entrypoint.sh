@@ -56,6 +56,20 @@ git config --global user.email "${GIT_AUTHOR_EMAIL:-agent@localhost}"
 git config --global --add safe.directory '*'
 
 # ---------------------------------------------------------------------------
+# GitHub CLI authentication
+# ---------------------------------------------------------------------------
+# `gh` reads GH_TOKEN straight from the environment — no `gh auth login` step,
+# and nothing persisted to a state volume to rotate. This is separate from
+# git_ssh_key: the SSH key can push a branch, but opening a PR goes through
+# the GitHub API, which needs its own token.
+if [ -f /run/secrets/gh_token ]; then
+  export GH_TOKEN="$(cat /run/secrets/gh_token)"
+  log "gh will authenticate with the GH_TOKEN secret."
+else
+  log "WARNING: no gh_token secret mounted — agents will push branches but 'gh pr create' will fail."
+fi
+
+# ---------------------------------------------------------------------------
 # Multica authentication
 # ---------------------------------------------------------------------------
 # Browser OAuth cannot call back into a Swarm task, so authenticate with a

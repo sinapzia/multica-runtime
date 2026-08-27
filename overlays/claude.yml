@@ -1,0 +1,36 @@
+version: "3.8"
+
+# Claude Code overlay for ../multica-runtime-stack.yml.
+#
+# The image ships both Claude Code and OpenCode regardless of which overlays
+# you deploy with (see Dockerfile) — this file only wires up the secret and
+# state volume Claude Code needs to authenticate. Without it, the runtime
+# still registers a "Claude" runtime (see RUNBOOK.md step 5), but it has
+# nothing to log in with.
+#
+# Deploy:
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
+#     --resolve-image never multica
+#
+# Combine with overlays/opencode.yml for a stack that runs both providers.
+#
+# Requires the claude_oauth_token secret to exist first — see RUNBOOK.md
+# "Create the Docker secrets". Minted with `claude setup-token` on a machine
+# that has a browser (Pro/Max/Team/Enterprise plan).
+
+services:
+  runtime:
+    secrets:
+      - claude_oauth_token
+    volumes:
+      # Claude Code login. Must match CLAUDE_CONFIG_DIR in the image, or
+      # .claude.json lands outside the volume and you get logged out on
+      # redeploy.
+      - claude_state:/home/node/.claude
+
+secrets:
+  claude_oauth_token:
+    external: true
+
+volumes:
+  claude_state:

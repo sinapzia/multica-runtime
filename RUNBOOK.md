@@ -4,6 +4,41 @@ Everything below assumes a Docker **Swarm** with exactly one manager, and that
 the runtime is pinned to that manager (`placement: node.role == manager` in the
 stack file). Named volumes are node-local, so the pin is what keeps state.
 
+## Stack files: base + provider overlays
+
+The image ships **both** Claude Code and OpenCode (see `Dockerfile`) — which
+provider(s) get *authenticated* on a given stack is controlled entirely by
+which compose files you pass to `docker stack deploy -c`, not by rebuilding a
+different image:
+
+- `multica-runtime-stack.yml` — the base. Everything common to every
+  deployment: the daemon, `multica_token`/`git_ssh_key`, the
+  `multica_state`/`multica_workspaces` volumes, network, placement, resources.
+  Never deployed alone in practice — it authenticates neither provider.
+- `overlays/claude.yml` — adds the `claude_oauth_token` secret and
+  `claude_state` volume.
+- `overlays/opencode.yml` — adds the `openai_api_key` secret and
+  `opencode_state` volume.
+- `overlays/codex.yml` — **scaffolding, not functional yet**. The image has no
+  Codex CLI and `entrypoint.sh` does not read `codex_api_key`. Kept in the
+  repo so the pattern is ready once Codex support lands; see the comments in
+  that file for what "landing" requires.
+
+`docker stack deploy` merges multiple `-c` files the same way `docker compose`
+does: top-level `secrets:`/`volumes:` maps merge by key, and the service's
+`secrets:`/`volumes:` lists concatenate. So each combination below is just the
+base plus whichever overlay(s) a given client needs — no duplicated stack
+files to keep in sync:
+
+| Client wants | Deploy with |
+|---|---|
+| Claude only | `-c multica-runtime-stack.yml -c overlays/claude.yml` |
+| OpenCode only | `-c multica-runtime-stack.yml -c overlays/opencode.yml` |
+| Both | `-c multica-runtime-stack.yml -c overlays/claude.yml -c overlays/opencode.yml` |
+
+Only create the secrets the overlay(s) you're deploying actually reference —
+see step 1 below.
+
 ---
 
 ## Installing on a fresh host
@@ -63,11 +98,13 @@ must be `tasks.agent:9001` (DNS round-robin over the agent tasks). A single node
 IP, a node hostname, or a VIP-resolving name pins Portainer to one agent
 forever — and it may not be the manager's.
 
-### 1. Create the four Docker secrets
+### 1. Create the Docker secrets
 
-The stack declares all four as `external: true`, so **they must exist before the
-first deploy** or it fails immediately. Create them once on the manager; they
-are cluster-wide and shared by every stack that references them.
+Every stack declares its secrets as `external: true`, so **they must exist
+before the first deploy** or it fails immediately. Create them once on the
+manager; they are cluster-wide and shared by every stack that references them.
+
+**Always required** (declared in the base file):
 
 ```bash
 # Multica personal access token — Settings > API Tokens in the Multica UI.
@@ -77,11 +114,26 @@ printf '%s' '<multica-token>' | docker secret create multica_token -
 # Must NOT have a passphrase; entrypoint.sh will tell you at boot if it does.
 docker secret create git_ssh_key /path/to/id_ed25519
 
+# GitHub API token so agents can `gh pr create` instead of just pushing a
+# branch. A fine-grained PAT scoped to the repos agents touch, with
+# "Pull requests: write" and "Contents: read" — do not hand it a
+# classic/all-repo token. gh reads GH_TOKEN straight from the environment,
+# no interactive `gh auth login` step.
+printf '%s' '<gh-token>' | docker secret create gh_token -
+```
+
+**Only if deploying `overlays/claude.yml`:**
+
+```bash
 # Minted with `claude setup-token` on a machine that HAS a browser
 # (requires a Pro/Max/Team/Enterprise plan). This is what removes the
 # interactive `docker exec` login step entirely.
 printf '%s' '<claude-oauth-token>' | docker secret create claude_oauth_token -
+```
 
+**Only if deploying `overlays/opencode.yml`:**
+
+```bash
 # OpenCode's built-in "openai" provider reads this from the environment.
 printf '%s' '<openai-api-key>' | docker secret create openai_api_key -
 ```
@@ -91,7 +143,9 @@ silent auth failure later. The SSH key is the exception — it needs its newline
 which is why it is created from a file, and `entrypoint.sh` normalises CRLF and
 the trailing newline on the way in.
 
-Confirm: `docker secret ls` should list all four.
+Confirm: `docker secret ls` should list `multica_token`, `git_ssh_key` and
+`gh_token`, plus `claude_oauth_token` and/or `openai_api_key` depending on
+which overlay(s) this stack deploys with.
 
 ### 2. Get the build context onto the manager
 
@@ -170,12 +224,25 @@ docker run --rm --entrypoint claude   multica-runtime:<tag> --version   # 2.1.23
 
 ### 4. Deploy the stack
 
-**By CLI** (recommended — no routing involved at all):
+**By CLI** (recommended — no routing involved at all). Pick the `-c` combo for
+the provider(s) this client wants (see "Stack files: base + provider overlays"
+above):
 
 ```bash
 export MULTICA_RUNTIME_IMAGE=multica-runtime:<tag>
 export MULTICA_WORKSPACE_ID=<workspace-uuid>       # see below if you don't have it yet
-docker stack deploy -c multica-runtime-stack.yml --resolve-image never multica
+
+# Claude only
+docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
+  --resolve-image never multica
+
+# OpenCode only
+docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
+  --resolve-image never multica
+
+# Both
+docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
+  -c overlays/opencode.yml --resolve-image never multica
 ```
 
 `docker stack deploy` does **not** read a `.env` file the way `docker compose`
@@ -191,8 +258,16 @@ Pick whichever you prefer:
 
 1. Name the stack **exactly** what you want the volume prefix to be — volumes
    are named `<stack>_<volume>`. Get it wrong and you come up with empty state.
-2. Web editor: paste `multica-runtime-stack.yml` verbatim. Git: point it at this
-   repo and the file path; the YAML then has to be committed to change it.
+2. Web editor: Portainer's editor only accepts one pasted file, it does not
+   merge `-c` files like the CLI does — paste `multica-runtime-stack.yml`
+   verbatim, then hand-merge in the `secrets`/`volumes` blocks from whichever
+   `overlays/*.yml` this client needs (same keys, same indentation level;
+   `services.runtime.secrets`/`services.runtime.volumes` are lists — just add
+   the overlay's entries to them). Git-backed: newer Portainer versions accept
+   multiple "Compose path" entries and will merge them the same way the CLI
+   does — check your version supports it before relying on it; if not, fall
+   back to the hand-merge above (or point it at a pre-merged file you maintain
+   per client).
 3. Stack environment variables: `MULTICA_RUNTIME_IMAGE` = your tag,
    `MULTICA_WORKSPACE_ID` = the workspace UUID.
 4. Leave **"re-pull image" OFF** while the tag exists only in the manager's
@@ -223,17 +298,29 @@ docker exec -it <container-id> multica workspace list --full-id
 ```bash
 docker service ps multica_runtime --no-trunc      # Running, no restart loop
 docker service logs multica_runtime --tail 80     # [entrypoint] lines, no WARNING
-docker exec -it <container-id> ls /run/secrets/   # all four secrets present
+docker exec -it <container-id> ls /run/secrets/   # secrets match the overlay(s) you deployed
 multica runtime list --output json
 ```
 
-`runtime list` should show **two** entries for this one container — the daemon
-registers one runtime per agent CLI it detects:
+The `ls /run/secrets/` output should match what you deployed: `multica_token`,
+`git_ssh_key` and `gh_token` always, plus `claude_oauth_token` and/or
+`openai_api_key` depending on which overlay(s) you used.
+
+`runtime list` should show **two** entries for this one container regardless
+of which overlay(s) you deployed — the daemon registers one runtime per agent
+CLI **installed in the image**, and the image always ships both:
 
 ```
 <uuid>  Claude (<daemon-id>)    claude    online
 <uuid>  Opencode (<daemon-id>)  opencode  online
 ```
+
+If you deployed with only one overlay (e.g. `overlays/claude.yml` alone), the
+other runtime still shows up **online** but has no auth secret — agents bound
+to it will fail on their first call, and `docker service logs` will have the
+matching entrypoint `WARNING`. That's expected: the overlay controls
+*authentication*, not which runtimes get registered. Only bind agents to the
+runtime(s) your overlay(s) actually authenticated.
 
 If only the Claude one appears, the image you deployed predates OpenCode —
 you deployed an old tag, or the build didn't actually run. Check
@@ -292,7 +379,10 @@ so a task meant for the old runtime can be claimed by the new one. That is a
 race, not parallelism, and it breaks exactly the thing you were trying to keep
 intact.
 
-Deploy it under a different stack name (`multica-v2`). What is and isn't shared:
+Deploy it under a different stack name (`multica-v2`), with the **same**
+overlay combo (`-c` flags) as the stack you're shadowing — mismatching them
+just gives the v2 runtime different providers than the one it's meant to
+mirror. What is and isn't shared:
 
 - **Secrets** — shared. They are `external`, cluster-wide.
 - **Volumes** — new and empty (`multica-v2_multica_state`, …). That is fine:
@@ -333,9 +423,11 @@ docker network rm <old-stack>_multica_runtime
 # 4. Delete the runtime records.
 multica runtime delete <old-runtime-id>
 
-# 5. Days later, once you're sure:
-docker volume rm <old-stack>_multica_state <old-stack>_claude_state \
-                 <old-stack>_opencode_state <old-stack>_multica_workspaces
+# 5. Days later, once you're sure. Include only the provider volumes this
+#    stack actually had (claude_state / opencode_state — whichever overlay(s)
+#    it was deployed with):
+docker volume rm <old-stack>_multica_state <old-stack>_multica_workspaces \
+                 <old-stack>_claude_state <old-stack>_opencode_state
 ```
 
 `multica runtime delete` **refuses** while agents are still bound to it. That
@@ -357,6 +449,26 @@ One slot means every agent queues behind every other, including both providers:
 Claude and OpenCode share the same container and therefore the same pool. Raise
 it to 2–3 if queueing becomes the bottleneck; split into a second stack only if
 you genuinely need the two providers running concurrently.
+
+---
+
+## GitHub CLI (`gh`) support
+
+Auth is the `gh_token` secret: `entrypoint.sh` exports it as `GH_TOKEN`, which
+`gh` picks up from the environment automatically — no `gh auth login` step,
+and nothing to persist in a state volume. This is separate from
+`git_ssh_key`: the SSH key can `clone`/`push`, but `gh pr create` and friends
+go through the GitHub API, which needs its own token.
+
+Use a **fine-grained** personal access token scoped to just the repos agents
+touch, with `Pull requests: write` and `Contents: read` — not a classic token
+with full-account access. If the secret isn't set, `git push` still works;
+only `gh` calls fail, with a `WARNING` in `docker service logs` at boot as the
+tell.
+
+To rotate: `docker secret create gh_token_v2 ...`, update the stack to
+reference the new secret name, redeploy, then remove the old one. Docker
+secrets can't be updated in place.
 
 ---
 
@@ -403,8 +515,9 @@ Either way, credentials persist in the `opencode_state` volume.
 
 ## Recovery
 
-State lives in four node-local named volumes (`multica_state`, `claude_state`,
-`opencode_state`, `multica_workspaces`) on the manager node. If that node is
+State lives in node-local named volumes on the manager node: `multica_state`
+and `multica_workspaces` always, plus `claude_state` and/or `opencode_state`
+depending on which overlay(s) this stack was deployed with. If that node is
 lost, the volumes are lost with it — but because both `multica login` and the
 Claude Code OAuth token are re-applied from secrets on every boot, redeploying
 elsewhere does **not** require re-running any login step. What you actually lose
