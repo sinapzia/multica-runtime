@@ -1,0 +1,34 @@
+version: "3.8"
+
+# OpenCode overlay for ../multica-runtime-stack.yml.
+#
+# The image ships both Claude Code and OpenCode regardless of which overlays
+# you deploy with (see Dockerfile) — this file only wires up the secret and
+# state volume OpenCode needs to authenticate. Without it, the runtime still
+# registers an "Opencode" runtime (see RUNBOOK.md step 5), but it has nothing
+# to authenticate with and agents bound to it will fail to call OpenAI.
+#
+# Deploy:
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
+#     --resolve-image never multica
+#
+# Combine with overlays/claude.yml for a stack that runs both providers.
+#
+# Requires the openai_api_key secret to exist first — see RUNBOOK.md
+# "Create the Docker secrets".
+
+services:
+  runtime:
+    secrets:
+      - openai_api_key
+    volumes:
+      # OpenCode state (sessions, trust, and auth.json if ever seeded by hand
+      # or via `opencode auth login`). Path matches the image's XDG data dir.
+      - opencode_state:/home/node/.local/share/opencode
+
+secrets:
+  openai_api_key:
+    external: true
+
+volumes:
+  opencode_state:
