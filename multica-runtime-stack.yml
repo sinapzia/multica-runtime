@@ -4,10 +4,22 @@ version: "3.8"
 #
 #   docker stack deploy -c multica-runtime-stack.yml --resolve-image never multica
 #
-# Build the image first (see RUNBOOK.md). Portainer can deploy this as a stack;
-# set MULTICA_RUNTIME_IMAGE in the stack's environment variables section —
+# Build the image first, ON THE MANAGER (see "Installing on a fresh host" in
+# RUNBOOK.md — the four external secrets have to exist before the first deploy,
+# and if you deploy through Portainer the agent needs AGENT_CLUSTER_ADDR set or
+# roughly half of all deploys land on a worker and fail to create the network).
+#
+# Portainer can deploy this as a stack; set MULTICA_RUNTIME_IMAGE in the stack's
+# environment variables section and turn the "re-pull image" toggle OFF — it
+# runs `docker pull`, which fails against a locally built tag. On the CLI,
 # `docker stack deploy` does NOT read a .env file the way `docker compose` does,
-# so export it in your shell when using the CLI.
+# so export the variables in your shell.
+#
+# Stack env vars this file reads:
+#   MULTICA_RUNTIME_IMAGE        image tag to run       (default multica-runtime:latest)
+#   MULTICA_WORKSPACE_ID         workspace UUID         (default unset)
+#   MULTICA_DAEMON_ID            daemon/device identity (default vps-runtime)
+#   MULTICA_AGENT_RUNTIME_NAME   display name           (default "VPS Runtime")
 
 services:
   runtime:
@@ -17,9 +29,15 @@ services:
       # Swarm gives every new task a fresh container hostname, and the daemon
       # defaults its ID to the hostname — so without these pinned, each redeploy
       # would register as a brand new runtime and orphan the old one.
-      MULTICA_DAEMON_ID: "vps-runtime"
-      MULTICA_DAEMON_DEVICE_NAME: "vps-runtime"
-      MULTICA_AGENT_RUNTIME_NAME: "VPS Runtime"
+      #
+      # Overridable so a second stack can run side by side for a blue/green
+      # migration WITHOUT editing this file (see RUNBOOK.md). Two daemons
+      # sharing an ID register as the SAME runtime: both heartbeat the same row
+      # and both poll the same queue, so a task meant for one can be claimed by
+      # the other. Always set MULTICA_DAEMON_ID when deploying a second stack.
+      MULTICA_DAEMON_ID: "${MULTICA_DAEMON_ID:-vps-runtime}"
+      MULTICA_DAEMON_DEVICE_NAME: "${MULTICA_DAEMON_ID:-vps-runtime}"
+      MULTICA_AGENT_RUNTIME_NAME: "${MULTICA_AGENT_RUNTIME_NAME:-VPS Runtime}"
 
       MULTICA_WORKSPACES_ROOT: "/home/node/multica_workspaces"
 
