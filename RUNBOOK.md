@@ -117,9 +117,26 @@ scp Dockerfile entrypoint.sh root@<manager>:/opt/multica-runtime/
 Two things to get right here:
 
 - **Copy into a clean, dedicated directory** — `/opt/multica-runtime`, not
-  `/root` or your home. `docker build .` uploads the *entire* directory to the
-  daemon as the build context; pointing it at a home directory ships everything
-  in it.
+  `/root` or your home. `docker build .` tars the *entire* directory and uploads
+  it to the daemon as the build context; pointing it at a home directory ships
+  everything in it, including `.ssh` and `.bash_history`.
+
+  Scope of the damage if you already did this: this Dockerfile has exactly one
+  `COPY`, and it names `entrypoint.sh` explicitly. There is no `COPY . .`, so
+  **nothing else can reach an image layer** — the resulting image is identical
+  either way. What you get is a slow build, a build cache holding a snapshot of
+  the directory, and a trap waiting for the day someone adds a broad `COPY`.
+  Move the files and `docker builder prune`; there is no need to rebuild or
+  rotate anything. Verify rather than trust:
+
+  ```bash
+  docker history --no-trunc multica-runtime:<tag> | grep -i copy
+  docker run --rm --entrypoint sh multica-runtime:<tag> -c 'ls -a /root /home/node'
+  ```
+
+  A `.dockerignore` would blunt this, but it is not a substitute for a clean
+  directory — it only filters what the daemon receives, and only what you
+  remembered to list.
 - **Use binary mode**, not auto/ASCII. An SFTP client in auto mode rewrites
   `entrypoint.sh` to CRLF and the container then dies at boot with a
   `bad interpreter` error that looks like nothing you changed.
@@ -168,22 +185,30 @@ does — the variables have to be exported in the shell.
 registry to record its digest. Without it the deploy still succeeds, but prints
 a `could not be accessed on a registry` warning that reads like a failure.
 
-**Through Portainer** (Stacks → Add stack → Web editor):
+**Through Portainer** — Stacks → Add stack. **Both the web editor and a
+git-backed stack work**, once step 0 is done; verified on this environment.
+Pick whichever you prefer:
 
 1. Name the stack **exactly** what you want the volume prefix to be — volumes
    are named `<stack>_<volume>`. Get it wrong and you come up with empty state.
-2. Paste `multica-runtime-stack.yml` verbatim.
+2. Web editor: paste `multica-runtime-stack.yml` verbatim. Git: point it at this
+   repo and the file path; the YAML then has to be committed to change it.
 3. Stack environment variables: `MULTICA_RUNTIME_IMAGE` = your tag,
    `MULTICA_WORKSPACE_ID` = the workspace UUID.
-4. **Turn "re-pull image" OFF.** That toggle runs `docker pull`, which fails
-   hard against a locally-built tag that exists in no registry. Portainer has no
-   equivalent of `--resolve-image never`.
+4. Leave **"re-pull image" OFF** while the tag exists only in the manager's
+   local image store. That toggle runs `docker pull`, which has nothing to pull
+   from; Portainer has no equivalent of `--resolve-image never`. Turn it on only
+   once you are pushing the image to a registry.
 5. Deploy.
 
-Prefer the **web editor** over a git-based stack. Portainer cannot convert a git
-stack to a web-editor stack in place — switching later means deleting and
-recreating the stack, and the git-backed redeploy path takes a different route
-through the agents than the editor does.
+The one thing that is not reversible: Portainer cannot convert a git stack to a
+web-editor stack in place. Switching later means deleting and recreating the
+stack — which, because volumes are named `<stack>_<volume>`, is only safe if you
+reuse the exact same stack name.
+
+Historical note: deploys used to fail through the agent for both methods. That
+was step 0 (`AGENT_CLUSTER_ADDR`), not the deploy method — it was originally
+misdiagnosed as the git path being special, and it is not.
 
 **First deploy, if you don't have the workspace UUID yet:** leave
 `MULTICA_WORKSPACE_ID` unset, let it come up, then read the resolved UUID from

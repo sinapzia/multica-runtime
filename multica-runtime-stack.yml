@@ -9,9 +9,11 @@ version: "3.8"
 # and if you deploy through Portainer the agent needs AGENT_CLUSTER_ADDR set or
 # roughly half of all deploys land on a worker and fail to create the network).
 #
-# Portainer can deploy this as a stack; set MULTICA_RUNTIME_IMAGE in the stack's
-# environment variables section and turn the "re-pull image" toggle OFF — it
-# runs `docker pull`, which fails against a locally built tag. On the CLI,
+# Portainer can deploy this as a stack — web editor or git-backed, both work —
+# by setting MULTICA_RUNTIME_IMAGE in the stack's environment variables section.
+# Leave the "re-pull image" toggle OFF while the tag only exists in the
+# manager's local image store: it runs `docker pull`, which has nothing to pull
+# from. On the CLI,
 # `docker stack deploy` does NOT read a .env file the way `docker compose` does,
 # so export the variables in your shell.
 #
