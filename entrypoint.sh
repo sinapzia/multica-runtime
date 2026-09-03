@@ -144,6 +144,16 @@ else
   log "WARNING: no openai_api_key secret mounted — OpenCode agents will fail to call OpenAI."
 fi
 
+# OpenCode's built-in "deepseek" provider works the same way, via its own
+# env var. Same binary, same opencode_state volume — this is an additional
+# provider on the existing OpenCode runtime, not a new one.
+if [ -f /run/secrets/deepseek_api_key ]; then
+  export DEEPSEEK_API_KEY="$(cat /run/secrets/deepseek_api_key)"
+  log "OpenCode will authenticate with the DeepSeek API key secret."
+else
+  log "WARNING: no deepseek_api_key secret mounted — OpenCode agents will fail to call DeepSeek."
+fi
+
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------

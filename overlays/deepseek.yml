@@ -1,0 +1,30 @@
+version: "3.8"
+
+# DeepSeek overlay for ../multica-runtime-stack.yml.
+#
+# Unlike overlays/claude.yml and overlays/opencode.yml, this is NOT a separate
+# agent CLI or runtime — DeepSeek is just another model provider inside the
+# same OpenCode binary (RUNBOOK.md step 5 still only registers one "Opencode"
+# runtime). This overlay only wires up the secret OpenCode's built-in
+# "deepseek" provider needs; the OpenCode state volume it reads/writes
+# auth.json from comes from overlays/opencode.yml.
+#
+# REQUIRES overlays/opencode.yml to be deployed together — deploying this
+# alone gives you the secret with nothing that reads it and no
+# opencode_state volume to persist auth into.
+#
+# Deploy:
+#   docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
+#     -c overlays/deepseek.yml --resolve-image never multica
+#
+# Requires the deepseek_api_key secret to exist first — see RUNBOOK.md
+# "Create the Docker secrets".
+
+services:
+  runtime:
+    secrets:
+      - deepseek_api_key
+
+secrets:
+  deepseek_api_key:
+    external: true

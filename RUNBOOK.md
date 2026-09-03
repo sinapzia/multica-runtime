@@ -19,6 +19,11 @@ different image:
   `claude_state` volume.
 - `overlays/opencode.yml` — adds the `openai_api_key` secret and
   `opencode_state` volume.
+- `overlays/deepseek.yml` — adds the `deepseek_api_key` secret only. DeepSeek
+  is a second model provider inside the same OpenCode binary, not a separate
+  CLI or runtime — this overlay **requires** `overlays/opencode.yml` to also
+  be deployed, since that's what provides the `opencode_state` volume and
+  registers the "Opencode" runtime in the first place.
 - `overlays/codex.yml` — **scaffolding, not functional yet**. The image has no
   Codex CLI and `entrypoint.sh` does not read `codex_api_key`. Kept in the
   repo so the pattern is ready once Codex support lands; see the comments in
@@ -33,7 +38,8 @@ files to keep in sync:
 | Client wants | Deploy with |
 |---|---|
 | Claude only | `-c multica-runtime-stack.yml -c overlays/claude.yml` |
-| OpenCode only | `-c multica-runtime-stack.yml -c overlays/opencode.yml` |
+| OpenCode only (OpenAI) | `-c multica-runtime-stack.yml -c overlays/opencode.yml` |
+| OpenCode only (OpenAI + DeepSeek) | `-c multica-runtime-stack.yml -c overlays/opencode.yml -c overlays/deepseek.yml` |
 | Both | `-c multica-runtime-stack.yml -c overlays/claude.yml -c overlays/opencode.yml` |
 
 Only create the secrets the overlay(s) you're deploying actually reference —
@@ -138,14 +144,22 @@ printf '%s' '<claude-oauth-token>' | docker secret create claude_oauth_token -
 printf '%s' '<openai-api-key>' | docker secret create openai_api_key -
 ```
 
+**Only if deploying `overlays/deepseek.yml`** (also requires
+`overlays/opencode.yml` — see above):
+
+```bash
+# OpenCode's built-in "deepseek" provider reads this from the environment.
+printf '%s' '<deepseek-api-key>' | docker secret create deepseek_api_key -
+```
+
 `printf '%s'` (no `\n`) matters: a trailing newline inside a token secret is a
 silent auth failure later. The SSH key is the exception — it needs its newlines,
 which is why it is created from a file, and `entrypoint.sh` normalises CRLF and
 the trailing newline on the way in.
 
 Confirm: `docker secret ls` should list `multica_token`, `git_ssh_key` and
-`gh_token`, plus `claude_oauth_token` and/or `openai_api_key` depending on
-which overlay(s) this stack deploys with.
+`gh_token`, plus `claude_oauth_token`, `openai_api_key` and/or
+`deepseek_api_key` depending on which overlay(s) this stack deploys with.
 
 ### 2. Get the build context onto the manager
 
@@ -240,6 +254,10 @@ docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
 docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
   --resolve-image never multica
 
+# OpenCode with DeepSeek too (deepseek.yml always needs opencode.yml alongside it)
+docker stack deploy -c multica-runtime-stack.yml -c overlays/opencode.yml \
+  -c overlays/deepseek.yml --resolve-image never multica
+
 # Both
 docker stack deploy -c multica-runtime-stack.yml -c overlays/claude.yml \
   -c overlays/opencode.yml --resolve-image never multica
@@ -303,8 +321,8 @@ multica runtime list --output json
 ```
 
 The `ls /run/secrets/` output should match what you deployed: `multica_token`,
-`git_ssh_key` and `gh_token` always, plus `claude_oauth_token` and/or
-`openai_api_key` depending on which overlay(s) you used.
+`git_ssh_key` and `gh_token` always, plus `claude_oauth_token`, `openai_api_key`
+and/or `deepseek_api_key` depending on which overlay(s) you used.
 
 `runtime list` should show **two** entries for this one container regardless
 of which overlay(s) you deployed — the daemon registers one runtime per agent
@@ -333,6 +351,11 @@ Nothing is bound to a new runtime automatically. Point an agent at one:
 ```bash
 multica agent create --name "OpenCode Test" \
   --runtime-id <opencode-runtime-id> --model openai/<model>
+
+# Same runtime, DeepSeek instead of OpenAI as the model provider — requires
+# overlays/deepseek.yml to have been deployed alongside overlays/opencode.yml.
+multica agent create --name "OpenCode DeepSeek Test" \
+  --runtime-id <opencode-runtime-id> --model deepseek/<model>
 
 multica agent update <agent-id> --runtime-id <runtime-id>
 ```
@@ -512,6 +535,27 @@ or seed `~/.local/share/opencode/auth.json` by hand:
     { "openai": { "type": "api", "key": "<key>" } }
 
 Either way, credentials persist in the `opencode_state` volume.
+
+## OpenCode (DeepSeek) support
+
+Same mechanism, second provider: `overlays/deepseek.yml` adds the
+`deepseek_api_key` secret, and `entrypoint.sh` exports it as
+`DEEPSEEK_API_KEY`, which OpenCode's built-in "deepseek" provider picks up
+from the environment automatically. This is **not** a separate runtime —
+agents still bind to the one "Opencode" runtime and select DeepSeek by model
+string (`--model deepseek/<model>`, see step 6). Because it's the same
+OpenCode binary, credentials persist in the same `opencode_state` volume that
+`overlays/opencode.yml` provides — deploy that overlay alongside this one, or
+there is no volume for `deepseek.yml`'s secret to authenticate anything
+against.
+
+Fallback if auto-detection ever stops working, same as OpenAI above:
+
+    docker exec -it <container-id> opencode auth login
+
+or seed `~/.local/share/opencode/auth.json` by hand:
+
+    { "deepseek": { "type": "api", "key": "<key>" } }
 
 ## Recovery
 
