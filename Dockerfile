@@ -11,7 +11,7 @@ ENV TZ="$TZ"
 # Pinned. `latest` means every rebuild is a different agent, and a bad
 # Claude Code release becomes an outage you cannot roll back to. To bump,
 # change this default, rebuild, and redeploy — see RUNBOOK.md.
-ARG CLAUDE_CODE_VERSION=2.1.234
+ARG CLAUDE_CODE_VERSION=2.1.285
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \

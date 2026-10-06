@@ -484,7 +484,7 @@ they vanish on the next redeploy.
 
 ## Bumping the pinned Claude Code / OpenCode version
 
-`CLAUDE_CODE_VERSION` (2.1.234) and `OPENCODE_VERSION` (1.18.23) in the
+`CLAUDE_CODE_VERSION` (2.1.285) and `OPENCODE_VERSION` (1.18.23) in the
 Dockerfile are pinned on purpose — both self-updaters are disabled, so the
 version baked into the image is what runs until the next rebuild. To bump
 either, change its default, rebuild with a new tag, redeploy.
