@@ -4,6 +4,38 @@ Everything below assumes a Docker **Swarm** with exactly one manager, and that
 the runtime is pinned to that manager (`placement: node.role == manager` in the
 stack file). Named volumes are node-local, so the pin is what keeps state.
 
+## This environment
+
+The facts every procedure below depends on. Check them first; if one is no
+longer true, fix it here before doing anything else.
+
+| What | Value |
+|---|---|
+| Manager | `manager-sinapzia-01` (the only manager) |
+| Build directory on the manager | **`/root/opt/multica-runtime`** — holds only `Dockerfile` and `entrypoint.sh` |
+| How files reach the manager | **SFTP**, binary mode. The manager has no GitHub access: no `git clone`/`git pull` there, it is not a git repo |
+| Source of the files | this repo, `main` — never edit them on the manager |
+| Stacks (Portainer, web editor) | `multica-v2` → service `multica-v2_runtime`, daemon ID `vps-runtime-v2` **(the one to update)**<br>`multica` → service `multica_runtime`, daemon ID `vps-runtime` (old, still in use — do not touch) |
+| `multica-v2` YAML | **`stacks/multica-v2.yml`** — exactly what is pasted in Portainer's web editor. Base + claude + opencode overlays hand-merged, without `gh_token`; update it whenever the base or an overlay changes |
+| Image | built locally on the manager, tag set via the stack variable `MULTICA_RUNTIME_IMAGE` |
+
+WARNINGs that show up on every boot and are **not** a sign the update broke
+something:
+
+- `no gh_token secret mounted` — the Portainer YAML of both stacks predates
+  the `gh_token` secret. Only `gh pr create` is affected.
+- `git SSH auth to github.com did not confirm` — present before and after
+  every image change so far. Likely a false positive of the check itself
+  (`ssh -T git@github.com` always exits 1, and the entrypoint runs with
+  `pipefail`). If agents push fine, ignore it.
+
+Anything else marked WARNING or ERROR in the boot logs is new and worth
+stopping for.
+
+Each stack picks its image only through its own `MULTICA_RUNTIME_IMAGE`.
+Building a new tag changes nothing until you set it on a stack — so updating
+`multica-v2` never touches `multica`.
+
 ## Stack files: base + provider overlays
 
 The image ships **both** Claude Code and OpenCode (see `Dockerfile`) — which
@@ -156,22 +188,20 @@ the repo is used.
 If the manager has GitHub access:
 
 ```bash
-git clone git@github.com:sinapzia/multica-runtime.git /opt/multica-runtime
-cd /opt/multica-runtime
+git clone git@github.com:sinapzia/multica-runtime.git /root/opt/multica-runtime
+cd /root/opt/multica-runtime
 ```
 
 If it does not (Portainer clones inside its own container, not onto the host —
-so the manager typically has no GitHub credentials), copy the two files over by
-SFTP/scp instead:
-
-```bash
-scp Dockerfile entrypoint.sh root@<manager>:/opt/multica-runtime/
-```
+so the manager typically has no GitHub credentials; **this is the case on
+`manager-sinapzia-01`**), upload the two files by SFTP into
+`/root/opt/multica-runtime/`. SFTP clients open in `/root`, so that is the
+`opt/multica-runtime` folder you see on login — not the system `/opt`.
 
 Two things to get right here:
 
-- **Copy into a clean, dedicated directory** — `/opt/multica-runtime`, not
-  `/root` or your home. `docker build .` tars the *entire* directory and uploads
+- **Copy into a clean, dedicated directory** — `/root/opt/multica-runtime`,
+  never `/root` itself or your home. `docker build .` tars the *entire* directory and uploads
   it to the daemon as the build context; pointing it at a home directory ships
   everything in it, including `.ssh` and `.bash_history`.
 
@@ -198,7 +228,7 @@ Two things to get right here:
 ### 3. Build the image on the manager
 
 ```bash
-cd /opt/multica-runtime
+cd /root/opt/multica-runtime
 docker build -t multica-runtime:<tag> .
 ```
 
@@ -206,9 +236,12 @@ Verify before deploying — the image starts under tini + `entrypoint.sh`, so
 `--entrypoint` is required or you get a daemon instead of a version string:
 
 ```bash
-docker run --rm --entrypoint opencode multica-runtime:<tag> --version   # 1.18.23
-docker run --rm --entrypoint claude   multica-runtime:<tag> --version   # 2.1.234
+docker run --rm --entrypoint opencode multica-runtime:<tag> --version
+docker run --rm --entrypoint claude   multica-runtime:<tag> --version
 ```
+
+Each must print exactly the `OPENCODE_VERSION` / `CLAUDE_CODE_VERSION` pinned
+in the Dockerfile.
 
 **Why on the manager, and why by CLI:**
 
@@ -346,13 +379,74 @@ says which image to run. Any change to `Dockerfile` or `entrypoint.sh`, and any
 Claude Code / OpenCode version bump, needs a rebuild or the redeploy just brings
 up the same binaries.
 
+The stack YAML does **not** change for a rebuild — only the
+`MULTICA_RUNTIME_IMAGE` stack variable does. Do every step in order; each one
+has a check, and a step whose check fails stops the procedure. Paths and names
+below are this environment's (see "This environment"); `<service>` is
+`multica-v2_runtime` unless you are deliberately updating the old stack.
+
+**1. Make the change in the repo.** The repo is the source of truth; the
+manager only ever receives copies of it. Never edit the files on the manager.
+(Committing/pushing can wait until step 6 confirms it works.)
+
+**2. Write down the tag currently running** — it is your rollback. On the
+manager:
+
 ```bash
-cd /opt/multica-runtime
-git pull                                          # or re-copy the two files
+docker service ls | grep runtime
+```
+
+✅ Check: you know the current tag of `<service>`.
+
+**3. Upload the build context by SFTP.** From your local checkout, upload
+`Dockerfile` and `entrypoint.sh` into `/root/opt/multica-runtime/` on the
+manager, binary mode, overwriting what is there. Then on the manager:
+
+```bash
+ls -la /root/opt/multica-runtime/
+grep -E '^ARG (CLAUDE_CODE|OPENCODE)_VERSION' /root/opt/multica-runtime/Dockerfile
+file /root/opt/multica-runtime/entrypoint.sh
+```
+
+✅ Check: only those two files; the versions are the ones in your local
+Dockerfile; `file` does **not** say `CRLF`.
+
+**4. Build with a tag that has never been used.** Name it after what changed
+(e.g. `claude-2.1.285`). If a build went wrong and you rebuild, use a new tag
+again (`claude-2.1.285-b`) — never reuse one, or you can't tell the images
+apart.
+
+```bash
+cd /root/opt/multica-runtime
 docker build -t multica-runtime:<new-tag> .
 ```
 
-Then update `MULTICA_RUNTIME_IMAGE` to the new tag and redeploy (step 4).
+✅ Check — both must match step 3's `grep` exactly. If they don't, you built
+from stale files: go back to step 3, do not deploy.
+
+```bash
+docker run --rm --entrypoint claude   multica-runtime:<new-tag> --version
+docker run --rm --entrypoint opencode multica-runtime:<new-tag> --version
+```
+
+**5. Deploy the new tag.** Portainer: Stacks → the stack (`multica-v2`) →
+*Environment variables* → set `MULTICA_RUNTIME_IMAGE` to
+`multica-runtime:<new-tag>` → leave the YAML untouched, "re-pull image"
+**OFF** → *Update the stack*.
+
+**6. Verify** — on the manager:
+
+```bash
+docker service ps <service>                 # new task Running, old one Shutdown
+docker service logs <service> --tail 80     # [entrypoint] lines, daemon started
+docker exec -it $(docker ps -qf name=<service>) claude --version
+```
+
+✅ Check: Running with no restart loop, and `claude --version` is the new one.
+Only now commit and push the repo change.
+
+**Rollback:** set `MULTICA_RUNTIME_IMAGE` back to the tag from step 2 and
+update the stack again.
 
 **Use a new tag every time.** Reusing one makes rollback impossible and the old
 image is what the running container still needs — do not prune an image a
@@ -487,7 +581,18 @@ they vanish on the next redeploy.
 `CLAUDE_CODE_VERSION` (2.1.285) and `OPENCODE_VERSION` (1.18.23) in the
 Dockerfile are pinned on purpose — both self-updaters are disabled, so the
 version baked into the image is what runs until the next rebuild. To bump
-either, change its default, rebuild with a new tag, redeploy.
+either, change its `ARG` default in the Dockerfile and follow "Rebuilding the
+image" from step 2.
+
+Available versions: `npm view @anthropic-ai/claude-code dist-tags` (prefer
+`stable` over `latest`) and `npm view opencode-ai dist-tags`.
+
+**A new model not showing up in Multica is not fixed by bumping Claude Code.**
+The model picker in the Multica UI is Multica's own list, not something the
+CLI reports. Bumping only matters so the CLI can actually *run* the model once
+Multica offers it. To see which version added a model, search the changelog
+(https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md) for its
+name — e.g. Opus 5.5 landed in 2.1.280.
 
 The multica CLI is intentionally left on latest: the daemon auto-updates itself
 at runtime by default (`MULTICA_DAEMON_AUTO_UPDATE`, unset in the stack file),
